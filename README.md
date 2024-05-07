@@ -28,6 +28,8 @@ Example:
 
 ![Screenshot](https://github.com/ma455173220/CP2K-Output-Analyzer/assets/42956329/c7fd90de-7b32-4b56-b007-e91b238fa0db)
 
+![Plot](https://github.com/ma455173220/CP2K-Output-Analyzer/assets/42956329/de0f19b5-a187-4ee8-8aa4-a7b46cc3f574)
+
 ---
 
 Feel free to optimize the script further!
