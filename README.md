@@ -22,6 +22,9 @@ This Python script analyzes CP2K output files generated during structure optimiz
 - **Column 10:** Number of SCF steps of the step (`SCF_STEPS`)
 
 The header also records the job start date and the total used time.
+For CELL_OPT runs, extra columns are appended: internal pressure [bar], pressure deviation, pressure converged, volume [Å³] and a/b/c.
+
+Plotting: `--plot` / `--no-plot` (without either flag it asks only when run in a terminal).
 
 If "x" is prefixed before the STEP column, it indicates an increase in energy for that step. If "!" is prefixed before the SCF column, it means the CYCLE reached the maximum set SCF steps.
 
