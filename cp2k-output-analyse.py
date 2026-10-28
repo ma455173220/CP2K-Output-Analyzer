@@ -1,8 +1,9 @@
-#!/apps/python3/3.10.0/bin/python3
+#!/usr/bin/env python3
 
 import os
 import sys
 import re
+import datetime
 
 class CP2KOutputAnalyzer:
     def __init__(self, output_file):
@@ -85,6 +86,8 @@ python3 cp2k-output-analyse.py OUTPUT_FILE.out
                 if "PROGRAM STARTED AT" in line:
                     starttime = line.split('AT')[-1].strip()
                     static_parameters['starttime'] = starttime
+                elif "PROGRAM ENDED AT" in line:
+                    static_parameters['endtime'] = line.split('AT')[-1].strip()
                 elif "Run type" in line:
                     RUN_TYPE = line.split()[-1]
                     # Only allow GEO_OPT and CELL_OPT run types
@@ -147,12 +150,20 @@ python3 cp2k-output-analyse.py OUTPUT_FILE.out
 
             # Extract relevant data for each optimization step
             for line in data.splitlines():
-                if any(term in line for term in ["ENERGY| Total FORCE_EVAL ( QS ) energy [a.u.]"]):
+                if any(term in line for term in ["ENERGY| Total FORCE_EVAL ( QS ) energy"]):
                     if optimization_step_data_dir['step'] == "Final":
                         TOTAL_ENERGY = float(line.replace("=", " ").split()[-1].strip())
                         optimization_step_data_dir['energy'] = TOTAL_ENERGY
                 elif any(term in line for term in ["SCF run NOT converged"]):
                     optimization_step_data_dir['scf_convergence'] = "! NO"
+                elif "*** SCF run converged in" in line:
+                    # e.g. "*** SCF run converged in    12 steps ***"
+                    optimization_step_data_dir['scf_steps'] = line.split()[-3]
+                elif any(term in line for term in ["outer SCF loop converged in", "outer SCF loop FAILED to converge",
+                                                   "Leaving inner SCF loop after reaching"]):
+                    # e.g. "outer SCF loop converged in   3 iterations or   45 steps"
+                    #      "Leaving inner SCF loop after reaching    50 steps."
+                    optimization_step_data_dir['scf_steps'] = line.split()[-2]
                 elif any(term in line for term in ["Total Energy      ", "Total energy [hartree]"]):
                     TOTAL_ENERGY = float(line.replace("=", " ").split()[-1].strip())
                     optimization_step_data_dir['energy'] = TOTAL_ENERGY
@@ -204,11 +215,23 @@ python3 cp2k-output-analyse.py OUTPUT_FILE.out
         # Store the extracted optimization step data in the object's attribute
         self.optimization_step_data = optimization_step_data_list
 
+    def get_total_used_time(self):
+        # Wall time between "PROGRAM STARTED AT" and "PROGRAM ENDED AT" if the job has finished,
+        # otherwise the sum of the "Used time" of all optimization steps
+        time_format = "%Y-%m-%d %H:%M:%S.%f"
+        try:
+            total_time = (datetime.datetime.strptime(self.static_parameters['endtime'], time_format)
+                          - datetime.datetime.strptime(self.static_parameters['starttime'], time_format)).total_seconds()
+        except (KeyError, ValueError):
+            total_time = sum(item.get('used_time', 0) for item in self.optimization_step_data)
+        return str(datetime.timedelta(seconds=round(total_time)))
+
     def write_data_to_file(self):
         # Write the extracted data to a CSV file
         output = self.output_file.split('.out')[0] + "__data.csv"
         with open(output, 'w') as f:
             f.write("# Job Starting Date: " + str(self.static_parameters['starttime']) \
+                    + "\n# Total used time: " + self.get_total_used_time() \
                     + "\n# Directory: " + os.getcwd() \
                     + "\n# RUN_TYPE: " + str(self.static_parameters['RUN_TYPE']) \
                     + "\n# EPS_SCF: " + str(self.static_parameters['EPS_SCF']) \
@@ -216,12 +239,12 @@ python3 cp2k-output-analyse.py OUTPUT_FILE.out
                     + "\n# SCF_OPTIMIZER: " + str(self.static_parameters['SCF_OPTIMIZER']) \
                     + "\n# OUTER_SCF: " + str(self.static_parameters['OUTER_SCF_CHECK']) \
                     + "\n# GEO_OPTIMIZER: " + str(self.static_parameters['GEO_OPTIMIZER']) \
-                    + "\n# STEP | SCF |    E [a.u.]    |  Delta E  | M_D(" + f"{self.static_parameters['MAX_D']:.4f}" + ") | R_D(" + f"{self.static_parameters['RMS_D']:.4f}" + ") | M_F(" + f"{self.static_parameters['MAX_F']:.5f}" + ") | R_F(" + f"{self.static_parameters['RMS_F']:.4f}" + ") | TIME [s]" + "\n")
+                    + "\n# STEP | SCF |    E [a.u.]    |  Delta E  | M_D(" + f"{self.static_parameters['MAX_D']:.4f}" + ") | R_D(" + f"{self.static_parameters['RMS_D']:.4f}" + ") | M_F(" + f"{self.static_parameters['MAX_F']:.5f}" + ") | R_F(" + f"{self.static_parameters['RMS_F']:.4f}" + ") | TIME [s] | SCF_STEPS" + "\n")
 
             for step_data in self.optimization_step_data:
                 if step_data['step'] == "Final":
                     # Write data for the final step
-                    line = "%6s |%4s |%15.8f |%7s    |%8s     |%8s     |%9s     |%8s     |%8s\n" % (
+                    line = "%6s |%4s |%15.8f |%7s    |%8s     |%8s     |%9s     |%8s     |%8s |%9s\n" % (
                         step_data['step'],
                         str(step_data['scf_convergence']),
                         step_data['energy'],
@@ -230,12 +253,18 @@ python3 cp2k-output-analyse.py OUTPUT_FILE.out
                         "N/A",
                         "N/A",
                         "N/A",
-                        "N/A"
+                        "N/A",
+                        str(step_data.get('scf_steps', "N/A"))
                     )
                 else:
                     # Format the line for non-"Final" steps
-                    if step_data['energy_decrease'] == "YES":
-                        line = "%6s |%4s |%15.8f |%10s |%8.5f %3s |%8.5f %3s |%9.6f %3s |%8.5f %3s |%8s\n" % (
+                    # "Decrease in energy" is only printed by some optimizers (e.g. BFGS, not L-BFGS/CG);
+                    # if it is missing, derive it from the sign of the energy change
+                    energy_decrease = step_data.get('energy_decrease')
+                    if energy_decrease is None:
+                        energy_decrease = "YES" if float(step_data.get('delta_E', 0)) <= 0 else "NO"
+                    if energy_decrease.upper() == "YES":
+                        line = "%6s |%4s |%15.8f |%10s |%8.5f %3s |%8.5f %3s |%9.6f %3s |%8.5f %3s |%8s |%9s\n" % (
                             str(step_data['step']),               # Step number
                             str(step_data['scf_convergence']),    # SCF convergence status
                             float(step_data['energy']),           # Total energy
@@ -248,10 +277,11 @@ python3 cp2k-output-analyse.py OUTPUT_FILE.out
                             str(step_data['MAX_F_CONVERGENCE']),  # Convergence status for maximum force
                             float(step_data['RMS_F_value']),      # RMS force
                             str(step_data['RMS_F_CONVERGENCE']),  # Convergence status for RMS force
-                            str(step_data['used_time'])           # Time used for this step
+                            str(step_data['used_time']),          # Time used for this step
+                            str(step_data.get('scf_steps', "N/A"))  # SCF steps of this step
                         )
                     else:
-                        line = "%1s %4s |%4s |%15.8f |%10s |%8.5f %3s |%8.5f %3s |%9.6f %3s |%8.5f %3s |%8s\n" % (
+                        line = "%1s %4s |%4s |%15.8f |%10s |%8.5f %3s |%8.5f %3s |%9.6f %3s |%8.5f %3s |%8s |%9s\n" % (
                             "↑",                                  # Indicator for energy increase
                             str(step_data['step']),               # Step number
                             str(step_data['scf_convergence']),    # SCF convergence status
@@ -265,7 +295,8 @@ python3 cp2k-output-analyse.py OUTPUT_FILE.out
                             str(step_data['MAX_F_CONVERGENCE']),  # Convergence status for maximum force
                             float(step_data['RMS_F_value']),      # RMS force
                             str(step_data['RMS_F_CONVERGENCE']),  # Convergence status for RMS force
-                            str(step_data['used_time'])           # Time used for this step
+                            str(step_data['used_time']),          # Time used for this step
+                            str(step_data.get('scf_steps', "N/A"))  # SCF steps of this step
                         )
 
                 # Write the formatted line to the file

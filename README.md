@@ -10,15 +10,18 @@ This Python script analyzes CP2K output files generated during structure optimiz
 1. Clone the repository to your local machine.
 2. Navigate to the directory containing your CP2K output file.
 3. Run the script using Python 3: `python3 cp2k-output-analyse.py cp2k.out`. Replace `cp2k.out` with the name of your CP2K output file.
-4. The script will generate a `cp2k_data.csv` file in the current directory.
+4. The script will generate a `<output>__data.csv` file (e.g. `cp2k__data.csv`) in the current directory.
 
 ## Output File Format
 - **Column 1:** Optimization step number
-- **Column 2:** Number of SCF steps used in optimization
+- **Column 2:** SCF convergence of the step (`! NO` if the SCF did not converge)
 - **Column 3:** Structure energy
 - **Column 4:** Energy change
 - **Columns 5-8:** Convergence parameters (YES indicates convergence)
 - **Column 9:** Time taken for optimization
+- **Column 10:** Number of SCF steps of the step (`SCF_STEPS`)
+
+The header also records the job start date and the total used time.
 
 If "x" is prefixed before the STEP column, it indicates an increase in energy for that step. If "!" is prefixed before the SCF column, it means the CYCLE reached the maximum set SCF steps.
 
